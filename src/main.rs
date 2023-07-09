@@ -133,6 +133,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     unfold(&mut text_file);
 
+    /*
+    error[E0515]: cannot return value referencing local variable `text_file`
+       --> src/main.rs:136:27
+        |
+    136 |     let (_, properties) = parse(&text_file)?;
+        |                           ^^^^^^----------^^
+        |                           |     |
+        |                           |     `text_file` is borrowed here
+        |                           returns a value referencing data owned by the current function
+
+     */
+
     let (_, properties) = parse(&text_file)?;
 
     println!("{:?}", parse_property_name("check:test"));
