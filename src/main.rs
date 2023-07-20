@@ -1,7 +1,7 @@
 use nom::{
     branch::alt,
-    bytes::complete::{tag, tag_no_case, take_until, take_while_m_n},
-    combinator::map_res,
+    bytes::complete::{tag, tag_no_case, take_till, take_until, take_while_m_n},
+    combinator::{map_res, opt},
     error::{context, convert_error},
     multi::{many_till, separated_list0, separated_list1},
     sequence::{preceded, separated_pair, terminated, tuple},
@@ -60,12 +60,16 @@ fn parse_property_parameter(input: &str) -> IResult<&str, (&str, &str)> {
     separated_pair(
         take_until(EQUAL),
         tag(EQUAL),
-        alt((take_until(SEMI), take_until(COLON))),
+        take_till(|c| matches!(c, ':' | ';')),
     )(input)
 }
 
+fn parse_parameters(input: &str) -> IResult<&str, (Vec<(&str, &str)>, &str)> {
+    many_till(preceded(tag(SEMI), parse_property_parameter), tag(COLON))(input)
+}
+
 fn parse_property_name(input: &str) -> IResult<&str, &str> {
-    let (input, name) = alt((take_until(SEMI), take_until(COLON)))(input)?;
+    let (input, name) = take_till(|c| matches!(c, ':' | ';'))(input)?;
 
     if name.to_uppercase() == END {
         Err(nom::Err::Error(nom::error::Error::new(
@@ -77,10 +81,6 @@ fn parse_property_name(input: &str) -> IResult<&str, &str> {
     }
 }
 
-fn parse_parameters(input: &str) -> IResult<&str, (Vec<(&str, &str)>, &str)> {
-    many_till(preceded(tag(SEMI), parse_property_parameter), tag(COLON))(input)
-}
-
 fn parse_property_value(input: &str) -> IResult<&str, Vec<&str>> {
     let (input, v) = take_until(LF)(input)?;
     Ok((input, vec![v]))
@@ -88,8 +88,13 @@ fn parse_property_value(input: &str) -> IResult<&str, Vec<&str>> {
 
 fn parse_property(input: &str) -> IResult<&str, Property> {
     let (input, name) = parse_property_name(input)?;
-    let (input, (params, _)) = parse_parameters(input)?;
+    let (input, params) = opt(parse_parameters)(input)?;
     let (input, value) = parse_property_value(input)?;
+
+    let params = match params {
+        Some((p, _)) => p,
+        None => vec![],
+    };
 
     let property = Property {
         name,
@@ -147,8 +152,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     unfold(&mut text_file);
 
-    let (_, properties) = parse(&text_file).map_err(|e| e.to_owned())?;
+    let (i, properties) = parse(&text_file).map_err(|e| e.to_owned())?;
 
+    println!("Check: {}", i.len());
     for p in properties.iter() {
         println!("{:?}", p);
     }
@@ -168,8 +174,13 @@ mod tests {
         );
         assert_eq!(
             parse_parameters(";hello=test:"),
-            Ok(((";"), (vec![("hello", "test")], ""))),
+            Ok(("", (vec![("hello", "test")], ":"))),
         );
+        assert_eq!(
+            parse_parameters(";hello=test;test=me:"),
+            Ok(("", (vec![("hello", "test"), ("test", "me")], ":"))),
+        );
+        assert_eq!(parse_parameters(":"), Ok(("", (vec![], ":"))),);
     }
 
     #[test]
@@ -193,11 +204,25 @@ mod tests {
 
     #[test]
     fn property() {
-        let test = "FN:Hello Betty\r\nN:Hello;Betty\r\n";
         assert_eq!(
-            // parse_properties("FN:Hello Betty\r\nN:Hello;Betty;;;\r\n"),
-            parse_properties(test),
-            Ok(("\r\n", vec![]))
+            parse_properties("FN:Hello Betty\r\nN:Hello;Betty;;;\r\n"),
+            Ok((
+                "\r\n",
+                vec![
+                    Property {
+                        group: None,
+                        name: "FN",
+                        params: vec![],
+                        value: vec!["Hello Betty"]
+                    },
+                    Property {
+                        group: None,
+                        name: "N",
+                        params: vec![],
+                        value: vec!["Hello;Betty;;;"]
+                    }
+                ]
+            ))
         );
         assert_eq!(
             parse_property("fn:test\r\n"),
